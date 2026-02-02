@@ -1,14 +1,142 @@
 /**
  * ==========================================================================================
- * FILTERS.gs - Filtri Pre-Analisi v1.0.0
+ * FILTERS.gs - Filtri Pre-Analisi v1.1.0
  * ==========================================================================================
  * Layer 0: Spam Filter
- * (Futuro: Filtro Fatture, Filtro Urgenti, etc.)
+ * 
+ * CHANGELOG v1.1.0:
+ * - AGGIUNTA: eseguiLayer0SpamFilter() - funzione orchestratrice batch
+ * - FIX: Integrazione completa nel flusso Logic.js
  * ==========================================================================================
  */
 
 // ═══════════════════════════════════════════════════════════════════════
-// LAYER 0 - SPAM FILTER
+// LAYER 0 - ORCHESTRATORE BATCH (NUOVA FUNZIONE!)
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Esegue Layer 0 Spam Filter su batch di email
+ * 
+ * Questa funzione è chiamata da Logic.js → analizzaEmailInCoda()
+ * 
+ * FLUSSO:
+ * 1. Carica email con status DA_FILTRARE
+ * 2. Per ogni email → chiama analisiLayer0SpamFilter()
+ * 3. Scrive risultati L0 nel foglio
+ * 4. Aggiorna status → SPAM o DA_ANALIZZARE
+ * 
+ * @param {Number} maxEmail - Max email da processare (default 50)
+ * @returns {Object} {totali, spam, legit, errori}
+ */
+function eseguiLayer0SpamFilter(maxEmail) {
+  maxEmail = maxEmail || 50;
+  var startTime = new Date();
+  
+  var risultati = {
+    totali: 0,
+    spam: 0,
+    legit: 0,
+    errori: 0
+  };
+  
+  logSistema("🛡️ L0 START: Spam Filter");
+  
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(CONFIG.SHEETS.LOG_IN);
+  
+  if (!sheet || sheet.getLastRow() <= 1) {
+    logSistema("⚠️ L0: Nessuna email in LOG_IN");
+    return risultati;
+  }
+  
+  // Carica email con status DA_FILTRARE
+  var emails = caricaEmailDaAnalizzare(sheet, "L0", maxEmail);
+  
+  if (emails.length === 0) {
+    logSistema("✅ L0: Nessuna email da filtrare (tutte già processate)");
+    return risultati;
+  }
+  
+  risultati.totali = emails.length;
+  logSistema("📧 L0: " + emails.length + " email in coda filtro spam");
+  
+  // Processa ogni email
+  for (var i = 0; i < emails.length; i++) {
+    var email = emails[i];
+    
+    try {
+      // Prepara dati email
+      var emailData = {
+        mittente: email.mittente || "",
+        oggetto: email.oggetto || "",
+        corpo: email.corpo || ""
+      };
+      
+      // Esegui analisi L0
+      var l0Result;
+      var connectorAttivo = false;
+      
+      // Check se Connector Fornitori è attivo
+      try {
+        connectorAttivo = typeof isConnectorFornitoriAttivo === 'function' && isConnectorFornitoriAttivo();
+      } catch(e) {
+        connectorAttivo = false;
+      }
+      
+      if (connectorAttivo && typeof eseguiLayer0SpamFilter_PATCHED === 'function') {
+        // Usa versione con integrazione Fornitori (skip L0 per fornitori noti)
+        l0Result = eseguiLayer0SpamFilter_PATCHED(emailData);
+      } else {
+        // Usa versione standard
+        l0Result = analisiLayer0SpamFilter(emailData);
+      }
+      
+      // Scrivi risultati nel foglio
+      scriviRisultatoL0(sheet, email.rowNum, l0Result);
+      
+      // Determina nuovo status
+      var nuovoStatus;
+      if (l0Result.isSpam) {
+        nuovoStatus = CONFIG.STATUS_EMAIL.SPAM;
+        risultati.spam++;
+        logSistema("🚫 L0: " + (email.id || "ROW-" + email.rowNum) + " → SPAM (" + l0Result.confidence + "%) - " + (l0Result.reason || ""));
+      } else {
+        nuovoStatus = CONFIG.STATUS_EMAIL.DA_ANALIZZARE;
+        risultati.legit++;
+        
+        // Log extra se skip per fornitore noto
+        if (l0Result.skipped && l0Result.skipReason) {
+          logSistema("✅ L0: " + (email.id || "ROW-" + email.rowNum) + " → SKIP (" + l0Result.skipReason + ")");
+        } else {
+          logSistema("✅ L0: " + (email.id || "ROW-" + email.rowNum) + " → LEGIT (" + l0Result.confidence + "%)");
+        }
+      }
+      
+      // Aggiorna status
+      aggiornaStatus(sheet, email.rowNum, nuovoStatus);
+      
+    } catch (error) {
+      risultati.errori++;
+      logSistema("❌ L0 Errore su " + (email.id || "ROW-" + email.rowNum) + ": " + error.toString());
+      
+      // In caso di errore, marca come DA_ANALIZZARE (safe default - meglio analizzare che perdere)
+      try {
+        aggiornaStatus(sheet, email.rowNum, CONFIG.STATUS_EMAIL.DA_ANALIZZARE);
+      } catch(e) {
+        // Ignora errore secondario
+      }
+    }
+  }
+  
+  var durata = Math.round((new Date() - startTime) / 1000);
+  logSistema("🛡️ L0 completato in " + durata + "s | Spam: " + risultati.spam + " | Legit: " + risultati.legit + " | Errori: " + risultati.errori);
+  
+  return risultati;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// LAYER 0 - ANALISI SINGOLA EMAIL
 // ═══════════════════════════════════════════════════════════════════════
 
 /**
@@ -18,26 +146,37 @@
  * 1. Se connettore attivo → pre-check fornitore
  * 2. Se fornitore noto con status valido → SKIP L0 (non è spam)
  * 3. Se non fornitore noto → esegui L0 normale
+ * 
+ * @param {Object} email - {mittente, oggetto, corpo}
+ * @returns {Object} {isSpam, confidence, reason, skipped, skipReason, fornitoreInfo}
  */
 function eseguiLayer0SpamFilter_PATCHED(email) {
-  // 🆕 PATCH: Pre-check connettore fornitori
+  // Pre-check connettore fornitori
   var fornitoreCheck = null;
   
   if (typeof preCheckEmailFornitore === 'function') {
-    fornitoreCheck = preCheckEmailFornitore(email.mittente);
-    
-    if (fornitoreCheck.isFornitoreNoto && fornitoreCheck.skipL0) {
-      // Fornitore conosciuto, skip L0
-      logSistema("🔗 L0 SKIP: Fornitore noto → " + fornitoreCheck.fornitore.nome);
+    try {
+      fornitoreCheck = preCheckEmailFornitore(email.mittente);
       
-      return {
-        isSpam: false,
-        confidence: 100,
-        reason: null,
-        skipped: true,
-        skipReason: "Fornitore conosciuto: " + fornitoreCheck.fornitore.nome,
-        fornitoreInfo: fornitoreCheck  // 🆕 Passa info al layer successivo
-      };
+      if (fornitoreCheck && fornitoreCheck.isFornitoreNoto && fornitoreCheck.skipL0) {
+        // Fornitore conosciuto, skip L0
+        logSistema("🔗 L0 SKIP: Fornitore noto → " + fornitoreCheck.fornitore.nome);
+        
+        return {
+          success: true,
+          isSpam: false,
+          confidence: 100,
+          reason: null,
+          skipped: true,
+          skipReason: "Fornitore conosciuto: " + fornitoreCheck.fornitore.nome,
+          fornitoreInfo: fornitoreCheck,
+          modello: "SKIP_FORNITORE",
+          timestamp: new Date()
+        };
+      }
+    } catch(e) {
+      // Se errore nel check fornitori, continua con L0 normale
+      logSistema("⚠️ Errore preCheckEmailFornitore: " + e.toString());
     }
   }
   
@@ -56,10 +195,14 @@ function eseguiLayer0SpamFilter_PATCHED(email) {
   return risultato;
 }
 
+
 /**
  * Analisi Layer 0: Classifica email come SPAM o LEGIT
+ * 
+ * Usa GPT-4o-mini per velocità e costo ridotto
+ * 
  * @param {Object} emailData - {mittente, oggetto, corpo}
- * @returns {Object} {success, isSpam, confidence, reason, modello}
+ * @returns {Object} {success, isSpam, confidence, reason, modello, timestamp}
  */
 function analisiLayer0SpamFilter(emailData) {
   var systemPrompt = "Sei un filtro anti-spam specializzato in email B2B commerciali.\n\n" +
@@ -134,6 +277,7 @@ function analisiLayer0SpamFilter(emailData) {
         confidence: 0,
         reason: null,
         error: "Parsing fallito: " + e.toString(),
+        modello: "ERROR",
         timestamp: new Date()
       };
     }
@@ -146,9 +290,11 @@ function analisiLayer0SpamFilter(emailData) {
     confidence: 0,
     reason: null,
     error: result.error,
+    modello: "ERROR",
     timestamp: new Date()
   };
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════
 // FILTRI FUTURI (Placeholder)

@@ -1,10 +1,27 @@
 /**
- * AI LAYER - Wrapper Chiamate GPT e Claude v1.0.3
+ * ==========================================================================================
+ * AI LAYER - Wrapper Chiamate GPT e Claude v1.1.0
+ * ==========================================================================================
  * Gestisce tutte le interazioni con i modelli AI
  * 
- * CHANGELOG v1.0.3:
- * - Aggiunto fallback GPT per Layer 2 se Claude non configurato
- * - Test connessioni più flessibile (Claude opzionale)
+ * CHANGELOG v1.1.0:
+ * - RIMOSSO: analisiLayer0SpamFilter() - ora in Filters.js
+ * - RIMOSSO: testLayer0SpamFilter() - ora in Tests.js
+ * - RIMOSSO: testLayer0SuFoglio() - ora in Tests.js
+ * - Pulizia codice duplicato
+ * ==========================================================================================
+ */
+
+// ═══════════════════════════════════════════════════════════════════════
+// CHIAMATE API BASE
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Chiamata a OpenAI GPT
+ * @param {String} systemPrompt - System prompt
+ * @param {String} userPrompt - User prompt
+ * @param {Object} options - {model, temperature, max_tokens, json_mode}
+ * @returns {Object} {success, content, model, usage, error}
  */
 function chiamataGPT(systemPrompt, userPrompt, options) {
   options = options || {};
@@ -67,6 +84,13 @@ function chiamataGPT(systemPrompt, userPrompt, options) {
   }
 }
 
+/**
+ * Chiamata a Anthropic Claude
+ * @param {String} systemPrompt - System prompt
+ * @param {String} userPrompt - User prompt
+ * @param {Object} options - {model, max_tokens}
+ * @returns {Object} {success, content, model, usage, error}
+ */
 function chiamataClaude(systemPrompt, userPrompt, options) {
   options = options || {};
   
@@ -123,6 +147,16 @@ function chiamataClaude(systemPrompt, userPrompt, options) {
   }
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════
+// LAYER 1 - GPT CATEGORIZATION
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Layer 1: Prima analisi con GPT-4o
+ * @param {Object} emailData - {mittente, oggetto, corpo}
+ * @returns {Object} {success, tags, sintesi, scores, modello, timestamp}
+ */
 function analisiLayer1(emailData) {
   var systemPrompt = "Sei un analista esperto di email commerciali B2B. " +
     "Analizza l'email e rispondi SOLO in formato JSON valido con questa struttura esatta: " +
@@ -162,6 +196,17 @@ function analisiLayer1(emailData) {
   return { success: false, error: result.error };
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════
+// LAYER 2 - CLAUDE VERIFICATION (con fallback GPT)
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Layer 2: Verifica con Claude (o GPT come fallback)
+ * @param {Object} emailData - {mittente, oggetto, corpo}
+ * @param {Object} layer1Result - Risultato Layer 1
+ * @returns {Object} {success, tags, sintesi, scores, confidence, richiestaRetry, note, modello, timestamp}
+ */
 function analisiLayer2(emailData, layer1Result) {
   // FALLBACK: Verifica se Claude e disponibile
   var claudeKey = PropertiesService.getScriptProperties().getProperty("CLAUDE_API_KEY");
@@ -219,6 +264,9 @@ function analisiLayer2(emailData, layer1Result) {
   return { success: false, error: result.error };
 }
 
+/**
+ * Layer 2 con GPT (fallback se Claude non disponibile)
+ */
 function analisiLayer2ConGPT(emailData, layer1Result) {
   var systemPrompt = "Sei un revisore esperto di analisi email commerciali B2B. " +
     "Ti viene fornita un'email e l'analisi preliminare fatta da un altro sistema. " +
@@ -268,41 +316,60 @@ function analisiLayer2ConGPT(emailData, layer1Result) {
   return { success: false, error: result.error };
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════
+// LAYER 3 - MERGE
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Layer 3: Merge risultati L1 + L2
+ * @param {Object} layer1 - Risultato Layer 1
+ * @param {Object} layer2 - Risultato Layer 2
+ * @returns {Object} {success, tags, sintesi, scores, confidence, divergenza, needsReview, azioniSuggerite, timestamp}
+ */
 function mergeAnalisi(layer1, layer2) {
-  var threshold = 70;
-  var divergenceThreshold = 30;
+  var threshold = CONFIG.AI_CONFIG.CONFIDENCE_THRESHOLD || 70;
+  var divergenceThreshold = CONFIG.AI_CONFIG.DIVERGENCE_THRESHOLD || 30;
   
   var divergenza = calcolaDivergenza(layer1.scores, layer2.scores);
   
+  // Merge tags (unione senza duplicati)
   var tagsMerged = [];
-  var allTags = layer1.tags.concat(layer2.tags);
+  var allTags = (layer1.tags || []).concat(layer2.tags || []);
   for (var i = 0; i < allTags.length; i++) {
     if (tagsMerged.indexOf(allTags[i]) === -1) {
       tagsMerged.push(allTags[i]);
     }
   }
   
-  var pesoL2 = layer2.confidence / 100;
+  // Merge scores (media pesata su confidence L2)
+  var pesoL2 = (layer2.confidence || 50) / 100;
   var pesoL1 = 1 - pesoL2;
   var scoresMerged = {};
   
   var scoreKeys = ["novita", "promo", "fattura", "catalogo", "prezzi", "problema", "risposta_campagna", "urgente", "ordine"];
   for (var j = 0; j < scoreKeys.length; j++) {
     var key = scoreKeys[j];
-    var s1 = layer1.scores[key] || 0;
-    var s2 = layer2.scores[key] || 0;
+    var s1 = (layer1.scores && layer1.scores[key]) || 0;
+    var s2 = (layer2.scores && layer2.scores[key]) || 0;
     scoresMerged[key] = Math.round(s1 * pesoL1 + s2 * pesoL2);
   }
   
-  var confidenceFinale = layer2.confidence;
+  // Calcola confidence finale
+  var confidenceFinale = layer2.confidence || 50;
   if (divergenza > divergenceThreshold) {
     confidenceFinale = Math.max(0, confidenceFinale - 20);
   }
   
-  var needsReview = confidenceFinale < threshold || divergenza > divergenceThreshold || layer2.richiestaRetry;
+  // Determina se serve review
+  var needsReview = confidenceFinale < threshold || 
+                    divergenza > divergenceThreshold || 
+                    layer2.richiestaRetry;
   
-  var sintesiFinale = layer2.confidence > 70 ? layer2.sintesi : layer1.sintesi;
+  // Scegli sintesi
+  var sintesiFinale = (layer2.confidence || 0) > 70 ? layer2.sintesi : layer1.sintesi;
   
+  // Genera azioni suggerite
   var azioniSuggerite = generaAzioniSuggerite(scoresMerged);
   
   return {
@@ -318,10 +385,16 @@ function mergeAnalisi(layer1, layer2) {
   };
 }
 
+/**
+ * Calcola divergenza media tra due set di scores
+ */
 function calcolaDivergenza(scores1, scores2) {
   var keys = ["novita", "promo", "fattura", "catalogo", "prezzi", "problema", "risposta_campagna", "urgente", "ordine"];
   var totalDiff = 0;
   var count = 0;
+  
+  scores1 = scores1 || {};
+  scores2 = scores2 || {};
   
   for (var i = 0; i < keys.length; i++) {
     var key = keys[i];
@@ -334,6 +407,9 @@ function calcolaDivergenza(scores1, scores2) {
   return count > 0 ? Math.round(totalDiff / count) : 0;
 }
 
+/**
+ * Genera azioni suggerite basate sugli scores
+ */
 function generaAzioniSuggerite(scores) {
   var azioni = [];
   
@@ -344,284 +420,36 @@ function generaAzioniSuggerite(scores) {
   if (scores.prezzi > 70) azioni.push("FLAG_PREZZI_FORNITORE");
   if (scores.risposta_campagna > 70) azioni.push("AGGIORNA_ESITO_CAMPAGNA");
   if (scores.urgente > 80) azioni.push("ALERT_URGENTE");
+  if (scores.ordine > 70) azioni.push("FLAG_ORDINE");
   
   return azioni;
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST CONNESSIONI
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Test connessioni API (GPT e Claude)
+ */
 function testConnessioniAI() {
   var ui = SpreadsheetApp.getUi();
   var report = "TEST CONNESSIONI API\n\n";
   
+  // Test GPT
   var gptResult = chiamataGPT("Sei un assistente.", "Rispondi solo con: OK", { max_tokens: 10 });
-  report += "OpenAI GPT: " + (gptResult.success ? "OK" : "ERRORE - " + gptResult.error) + "\n";
+  report += "OpenAI GPT: " + (gptResult.success ? "✅ OK" : "❌ ERRORE - " + gptResult.error) + "\n";
   
+  // Test Claude (opzionale)
   var claudeKey = PropertiesService.getScriptProperties().getProperty("CLAUDE_API_KEY");
   if (claudeKey) {
     var claudeResult = chiamataClaude("Sei un assistente.", "Rispondi solo con: OK", { max_tokens: 10 });
-    report += "Claude: " + (claudeResult.success ? "OK" : "ERRORE - " + claudeResult.error) + "\n";
+    report += "Claude: " + (claudeResult.success ? "✅ OK" : "❌ ERRORE - " + claudeResult.error) + "\n";
   } else {
-    report += "Claude: Non configurato (Fallback: GPT-4o)\n";
+    report += "Claude: ⚠️ Non configurato (Fallback: GPT-4o)\n";
   }
   
   ui.alert("Test API", report, ui.ButtonSet.OK);
   logSistema(report.replace(/\n/g, " | "));
-}
-
-function logSistema(messaggio) {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName("LOG_SISTEMA");
-    if (sheet) {
-      sheet.appendRow([new Date(), messaggio]);
-    }
-  } catch(e) {
-    Logger.log("Log: " + messaggio);
-  }
-}
-/**
- * ═══════════════════════════════════════════════════════════════════════
- * LAYER 0 - SPAM FILTER (GPT-4o-mini)
- * ═══════════════════════════════════════════════════════════════════════
- */
-
-/**
- * Layer 0: Spam Filter Ultra-Rapido
- * @param {Object} emailData - {mittente, oggetto, corpo}
- * @returns {Object} {success, isSpam, confidence, reason, modello}
- */
-function analisiLayer0SpamFilter(emailData) {
-  var systemPrompt = "Sei un filtro anti-spam specializzato in email B2B commerciali.\n\n" +
-    "Il tuo compito e' classificare email come SPAM o LEGIT.\n\n" +
-    "SPAM include:\n" +
-    "- Newsletter marketing generiche non richieste\n" +
-    "- Promozioni servizi non pertinenti al business\n" +
-    "- Tentativi phishing/truffa\n" +
-    "- Auto-reply e out-of-office\n" +
-    "- Notifiche automatiche di sistema\n" +
-    "- Email in lingue diverse da italiano/inglese\n" +
-    "- Email duplicate\n\n" +
-    "LEGIT include:\n" +
-    "- Email da fornitori commerciali conosciuti\n" +
-    "- Conferme ordini, fatture, listini prezzi\n" +
-    "- Comunicazioni su prodotti/servizi\n" +
-    "- Risposte a campagne marketing nostre\n" +
-    "- Problemi/reclami clienti\n" +
-    "- Qualsiasi email con contenuto commerciale rilevante\n\n" +
-    "IMPORTANTE: In caso di dubbio, classifica come LEGIT.\n" +
-    "Meglio analizzare un'email in piu' che perderne una importante.\n\n" +
-    "Rispondi SOLO in formato JSON:\n" +
-    "{\n" +
-    '  "isSpam": true/false,\n' +
-    '  "confidence": 0-100,\n' +
-    '  "reason": "Motivo breve se spam, altrimenti null"\n' +
-    "}";
-
-  var userPrompt = "Classifica questa email:\n\n" +
-    "MITTENTE: " + emailData.mittente + "\n" +
-    "OGGETTO: " + emailData.oggetto + "\n" +
-    "CORPO (prime 500 caratteri):\n" +
-    emailData.corpo.substring(0, 500) + "...\n\n" +
-    "Rispondi SOLO con il JSON, senza altri commenti.";
-
-  var options = {
-    model: CONFIG.AI_CONFIG.MODEL_SPAM_FILTER,
-    temperature: CONFIG.AI_CONFIG.L0_TEMPERATURE,
-    max_tokens: CONFIG.AI_CONFIG.L0_MAX_TOKENS,
-    json_mode: true
-  };
-
-  var result = chiamataGPT(systemPrompt, userPrompt, options);
-  
-  if (result.success) {
-    try {
-      var parsed = JSON.parse(result.content);
-      
-      // Validazione
-      if (typeof parsed.isSpam !== "boolean") {
-        throw new Error("isSpam non e' boolean");
-      }
-      
-      var confidence = parseInt(parsed.confidence) || 0;
-      
-      // Safety: Se confidence bassa, considera LEGIT
-      var isSafeSpam = parsed.isSpam && 
-                       confidence >= CONFIG.AI_CONFIG.L0_CONFIDENCE_THRESHOLD;
-      
-      return {
-        success: true,
-        isSpam: isSafeSpam,
-        confidence: confidence,
-        reason: isSafeSpam ? (parsed.reason || "Spam generico") : null,
-        modello: result.model,
-        timestamp: new Date()
-      };
-    } catch (e) {
-      logSistema("Errore parsing L0: " + e.toString());
-      // In caso di errore, assume LEGIT (safe default)
-      return { 
-        success: false, 
-        isSpam: false,  // DEFAULT SAFE
-        confidence: 0,
-        reason: null,
-        error: "Parsing fallito: " + e.toString() 
-      };
-    }
-  }
-  
-  // Se chiamata API fallisce, assume LEGIT
-  return { 
-    success: false, 
-    isSpam: false,  // DEFAULT SAFE
-    confidence: 0,
-    reason: null,
-    error: result.error 
-  };
-}
-
-/**
- * Test Layer 0 Spam Filter
- */
-function testLayer0SpamFilter() {
-  var ui = SpreadsheetApp.getUi();
-  
-  // Test 1: Email legit
-  logSistema("🧪 Test L0: Email legit (conferma ordine)");
-  var emailLegit = {
-    mittente: "ordini@fornitoretest.it",
-    oggetto: "Conferma Ordine #12345",
-    corpo: "Gentile cliente, confermiamo ricezione ordine. Totale: 1250 euro. Grazie."
-  };
-  
-  var resultLegit = analisiLayer0SpamFilter(emailLegit);
-  logSistema("Risultato LEGIT: " + JSON.stringify(resultLegit));
-  
-  // Test 2: Email spam
-  logSistema("🧪 Test L0: Email spam (newsletter)");
-  var emailSpam = {
-    mittente: "noreply@marketing-platform.com",
-    oggetto: "🎉 Super Offerta! Sconto 90% Solo Oggi!!!",
-    corpo: "Clicca qui per vincere un iPhone! Offerta limitata! Non perdere questa occasione unica!"
-  };
-  
-  var resultSpam = analisiLayer0SpamFilter(emailSpam);
-  logSistema("Risultato SPAM: " + JSON.stringify(resultSpam));
-  
-  // Report
-  var report = "🧪 TEST LAYER 0 SPAM FILTER\n\n" +
-    "━━━ EMAIL LEGIT ━━━\n" +
-    "IsSpam: " + resultLegit.isSpam + "\n" +
-    "Confidence: " + resultLegit.confidence + "%\n" +
-    "Modello: " + resultLegit.modello + "\n\n" +
-    "━━━ EMAIL SPAM ━━━\n" +
-    "IsSpam: " + resultSpam.isSpam + "\n" +
-    "Confidence: " + resultSpam.confidence + "%\n" +
-    "Reason: " + (resultSpam.reason || "-") + "\n" +
-    "Modello: " + resultSpam.modello + "\n\n" +
-    (resultLegit.isSpam === false && resultSpam.isSpam === true ? 
-     "✅ TEST SUPERATO!" : 
-     "⚠️ Verifica risultati");
-  
-  ui.alert("Test L0 Completato", report, ui.ButtonSet.OK);
-}
-/**
- * Test Layer 0 su email reali nel foglio
- */
-function testLayer0SuFoglio() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(CONFIG.SHEETS.LOG_IN);
-  
-  if (!sheet) {
-    SpreadsheetApp.getUi().alert("❌ Foglio LOG_IN non trovato");
-    return;
-  }
-  
-  var data = sheet.getDataRange().getValues();
-  var headers = data[0];
-  data.shift();
-  
-  var colId = headers.indexOf(CONFIG.COLONNE_LOG_IN.ID_EMAIL);
-  var colMittente = headers.indexOf(CONFIG.COLONNE_LOG_IN.MITTENTE);
-  var colOggetto = headers.indexOf(CONFIG.COLONNE_LOG_IN.OGGETTO);
-  var colCorpo = headers.indexOf(CONFIG.COLONNE_LOG_IN.CORPO);
-  var colStatus = headers.indexOf(CONFIG.COLONNE_LOG_IN.STATUS);
-  
-  var emailDaFiltrare = [];
-  
-  // Carica email DA_FILTRARE
-  for (var i = 0; i < data.length; i++) {
-    if (data[i][colStatus] === CONFIG.STATUS_EMAIL.DA_FILTRARE) {
-      emailDaFiltrare.push({
-        rowNum: i + 2,
-        id: data[i][colId],
-        mittente: data[i][colMittente],
-        oggetto: data[i][colOggetto],
-        corpo: data[i][colCorpo]
-      });
-    }
-  }
-  
-  if (emailDaFiltrare.length === 0) {
-    SpreadsheetApp.getUi().alert(
-      "⚠️ Nessuna Email da Filtrare",
-      "Non ci sono email con STATUS = DA_FILTRARE.\n\n" +
-      "Esegui prima: creaEmailTestSpam()",
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
-    return;
-  }
-  
-  logSistema("🛡️ TEST L0: Inizio filtro su " + emailDaFiltrare.length + " email");
-  
-  var risultati = [];
-  
-  emailDaFiltrare.forEach(function(email) {
-    logSistema("Filtro " + email.id + "...");
-    
-    var l0Result = analisiLayer0SpamFilter(email);
-    
-    risultati.push({
-      id: email.id,
-      isSpam: l0Result.isSpam,
-      confidence: l0Result.confidence,
-      reason: l0Result.reason || "-"
-    });
-    
-    // Scrivi risultati nel foglio
-    scriviRisultatoL0(sheet, email.rowNum, l0Result);
-    
-    // Aggiorna status
-    var nuovoStatus = l0Result.isSpam ? 
-      CONFIG.STATUS_EMAIL.SPAM : 
-      CONFIG.STATUS_EMAIL.DA_ANALIZZARE;
-    
-    aggiornaStatus(sheet, email.rowNum, nuovoStatus);
-    
-    logSistema(email.id + " → " + (l0Result.isSpam ? "SPAM" : "LEGIT") + 
-               " (conf: " + l0Result.confidence + "%)");
-  });
-  
-  // Report finale
-  var spamCount = risultati.filter(function(r) { return r.isSpam; }).length;
-  var legitCount = risultati.length - spamCount;
-  
-  var report = "🛡️ TEST LAYER 0 COMPLETATO\n\n" +
-    "Email analizzate: " + risultati.length + "\n" +
-    "🚫 SPAM: " + spamCount + "\n" +
-    "✅ LEGIT: " + legitCount + "\n\n" +
-    "━━━ DETTAGLIO ━━━\n";
-  
-  risultati.forEach(function(r) {
-    var icon = r.isSpam ? "🚫" : "✅";
-    report += icon + " " + r.id + ": " + 
-              (r.isSpam ? "SPAM" : "LEGIT") + 
-              " (" + r.confidence + "%) - " + r.reason + "\n";
-  });
-  
-  report += "\n━━━ ATTESO ━━━\n" +
-    "SPAM-001, SPAM-002, SPAM-003 → SPAM\n" +
-    "LEGIT-001, LEGIT-002, LEGIT-003 → LEGIT\n\n" +
-    "Verifica il foglio LOG_IN per dettagli.";
-  
-  SpreadsheetApp.getUi().alert("Test L0 Completato", report, SpreadsheetApp.getUi().ButtonSet.OK);
-  logSistema("🛡️ TEST L0 COMPLETATO: " + spamCount + " spam, " + legitCount + " legit");
 }

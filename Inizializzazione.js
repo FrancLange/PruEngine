@@ -6,10 +6,9 @@
  * ==========================================================================================
  */
 
-function onOpen_PATCHED() {
+function onOpen() {
   var ui = SpreadsheetApp.getUi();
-  
-  var menu = ui.createMenu('🤖 Email Intelligence v1.2')
+  ui.createMenu('🤖 Email Intelligence v1.2')
     .addItem('🛠️ Setup Completo', 'setupCompleto')
     .addSeparator()
     .addSubMenu(ui.createMenu('🔑 API Keys')
@@ -21,22 +20,19 @@ function onOpen_PATCHED() {
       .addItem('🛡️ Test Layer 0 (Spam Filter)', 'testLayer0SpamFilter')
       .addItem('🧪 Test Layer 1 (GPT)', 'testLayer1')
       .addItem('🧪 Test Analisi Completa', 'testAnalisiSingola')
-      .addItem('▶️ Analizza Email in Coda', 'menuAnalizzaEmailInCoda'));
-  
-  // 🆕 PATCH: Aggiungi submenu Connettori
-  if (typeof creaSubmenuConnettoreFornitori === 'function') {
-    menu.addSeparator()
-        .addSubMenu(ui.createMenu('🔗 Connettori')
-          .addSubMenu(creaSubmenuConnettoreFornitori()));
-  }
-  
-  menu.addSeparator()
-      .addItem('⏰ Configura Trigger', 'configuraTrigger')
-      .addItem('ℹ️ Info & Changelog', 'showChangelog')
-      .addToUi();
+      .addItem('▶️ Analizza Email in Coda', 'menuAnalizzaEmailInCoda'))
+    .addSeparator()
+    // 🆕 NUOVO SUBMENU SYNC FORNITORI
+    .addSubMenu(ui.createMenu('🔄 Sync Fornitori')
+      .addItem('🔄 Sync Completo', 'menuTestSyncFornitori')
+      .addItem('🔍 Lookup Email', 'menuTestLookupFornitore')
+      .addItem('🛡️ Test Bypass Spam', 'menuTestBypassSpam')
+      .addItem('📊 Statistiche', 'menuStatisticheSync'))
+    .addSeparator()
+    .addItem('⏰ Configura Trigger', 'configuraTrigger')
+    .addItem('ℹ️ Info & Changelog', 'showChangelog')
+    .addToUi();
 }
-
-
 // ═══════════════════════════════════════════════════════════════════════
 // SETUP COMPLETO
 // ═══════════════════════════════════════════════════════════════════════
