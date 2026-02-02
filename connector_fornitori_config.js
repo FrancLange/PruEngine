@@ -1,10 +1,10 @@
 /**
  * ==========================================================================================
- * CONNECTOR FORNITORI - CONFIG v1.0.0
+ * CONNECTOR FORNITORI - CONFIG v1.1.0
  * ==========================================================================================
  * Configurazione connettore per integrazione Fornitori Engine ↔ Email Engine
  * 
- * AUTONOMO: Questo file può essere usato standalone o integrato
+ * v1.1.0: Aggiornato mapping colonne per matchare FORNITORI_SYNC reale
  * ==========================================================================================
  */
 
@@ -14,7 +14,7 @@ var CONNECTOR_FORNITORI = {
   // IDENTIFICATIVO
   // ═══════════════════════════════════════════════════════════
   NOME: "Connector_Fornitori",
-  VERSIONE: "1.0.0",
+  VERSIONE: "1.1.0",
   DESCRIZIONE: "Integrazione Fornitori Engine con Email Engine",
   
   // ═══════════════════════════════════════════════════════════
@@ -55,30 +55,34 @@ var CONNECTOR_FORNITORI = {
   },
   
   // ═══════════════════════════════════════════════════════════
-  // COLONNE FORNITORI (mapping)
-  // Deve matchare Config_Fornitori.gs del Fornitori Engine
+  // COLONNE FORNITORI (mapping con nomi reali del foglio)
+  // AGGIORNATO v1.1.0 per matchare FORNITORI_SYNC
   // ═══════════════════════════════════════════════════════════
   COLONNE: {
     // Anagrafica (per lookup)
     ID_FORNITORE: "ID_FORNITORE",
-    PRIORITA_URGENTE: "PRIORITA_URGENTE",
-    NOME_AZIENDA: "NOME_AZIENDA",
-    EMAIL_ORDINI: "EMAIL_ORDINI",
-    EMAIL_ALTRI: "EMAIL_ALTRI",
+    PRIORITA_URGENTE: "PRIORITA",
+    NOME_AZIENDA: "RAGIONE_SOCIALE",
+    EMAIL_ORDINI: "EMAIL_PRINCIPALE",
+    EMAIL_ALTRI: "EMAIL_SECONDARIE",
+    DOMINIO_EMAIL: "DOMINIO_EMAIL",
     CONTATTO: "CONTATTO",
     TELEFONO: "TELEFONO",
     
     // Per contesto L1
-    SCONTO_PERCENTUALE: "SCONTO_PERCENTUALE",
+    SCONTO_PERCENTUALE: "SCONTO_BASE",
     DATA_PROSSIMA_PROMO: "DATA_PROSSIMA_PROMO",
     STATUS_ULTIMA_AZIONE: "STATUS_ULTIMA_AZIONE",
-    PERFORMANCE_SCORE: "PERFORMANCE_SCORE",
-    STATUS_FORNITORE: "STATUS_FORNITORE",
+    PERFORMANCE_SCORE: "PERFORMANCE",
+    STATUS_FORNITORE: "STATUS",
     
     // Per update
     DATA_ULTIMA_EMAIL: "DATA_ULTIMA_EMAIL",
+    DATA_ULTIMO_ORDINE: "ULTIMO_ORDINE",
     DATA_ULTIMA_ANALISI: "DATA_ULTIMA_ANALISI",
-    EMAIL_ANALIZZATE_COUNT: "EMAIL_ANALIZZATE_COUNT"
+    EMAIL_ANALIZZATE_COUNT: "EMAIL_ANALIZZATE_COUNT",
+    NOTE_INTERNE: "NOTE_INTERNE",
+    ULTIMA_SYNC: "ULTIMA_SYNC"
   },
   
   // ═══════════════════════════════════════════════════════════
@@ -90,12 +94,12 @@ var CONNECTOR_FORNITORI = {
   // CAMPI PER CONTESTO L1
   // ═══════════════════════════════════════════════════════════
   CAMPI_CONTESTO: [
-    "NOME_AZIENDA",
-    "PRIORITA_URGENTE",
-    "SCONTO_PERCENTUALE",
+    "RAGIONE_SOCIALE",
+    "PRIORITA",
+    "SCONTO_BASE",
     "DATA_PROSSIMA_PROMO",
     "STATUS_ULTIMA_AZIONE",
-    "PERFORMANCE_SCORE"
+    "PERFORMANCE"
   ],
   
   // ═══════════════════════════════════════════════════════════
